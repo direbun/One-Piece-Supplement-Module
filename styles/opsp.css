@@ -1,0 +1,143 @@
+/* one-piece-supplement-module | styles/style.css */
+
+.onepiece-root {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 8px 10px;
+}
+
+.onepiece-root,
+.onepiece-root * {
+  pointer-events: auto;
+}
+
+/* shared */
+.onepiece-label {
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.onepiece-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.onepiece-row-tight {
+  align-items: baseline;
+}
+
+.onepiece-meta {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+/* buttons */
+.onepiece-iconbtn {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-light-tertiary);
+  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.onepiece-iconbtn i {
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+/* Willpower tile */
+.onepiece-wp-tile {
+  border: 1px solid var(--color-border-light-tertiary);
+  background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+  border-radius: 10px;
+  padding: 8px 10px;
+
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.onepiece-wp-iconbox {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-light-tertiary);
+  background: color-mix(in srgb, var(--color-bg) 82%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.9;
+}
+
+.onepiece-wp-iconbox i {
+  font-size: 16px;
+}
+
+.onepiece-wp-value {
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.1;
+  margin-top: 2px;
+}
+
+/* Belly card */
+.onepiece-belly-card {
+  border: 1px solid var(--color-border-light-tertiary);
+  background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.onepiece-belly-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.onepiece-belly-value {
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+/* neutral “bank” bar */
+.onepiece-bankbar {
+  height: 10px;
+  border-radius: 999px;
+  margin-top: 6px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-light-tertiary);
+  background: color-mix(in srgb, var(--color-bg) 75%, rgba(0,0,0,0.25));
+}
+
+.onepiece-bankfill {
+  height: 100%;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.onepiece-hint {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-top: 6px;
+}
+
+/* Tidy spacing tweak */
+.tidy5e-sheet .onepiece-wp-tile,
+.tidy5e-sheet .onepiece-belly-card {
+  padding: 7px 8px;
+}
+
