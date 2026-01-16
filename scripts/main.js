@@ -12,7 +12,6 @@ function ensureOnePieceStyles() {
   if (document.getElementById(id)) return;
 
   const css = `
-/* --- One Piece Supplement UI --- */
 .onepiece-op-root{margin:6px 6px 8px;display:flex;flex-direction:column;gap:8px}
 .onepiece-op-root,.onepiece-op-root *{pointer-events:auto}
 
@@ -65,7 +64,6 @@ function ensureOnePieceStyles() {
   background:linear-gradient(90deg, rgba(255,255,255,.22), rgba(255,255,255,.10));
 }
 
-/* Tighten inside very narrow sidebars */
 .tidy5e-sheet .onepiece-op-card{padding:9px 9px 8px}
 `;
 
@@ -73,6 +71,28 @@ function ensureOnePieceStyles() {
   style.id = id;
   style.textContent = css;
   document.head.appendChild(style);
+}
+
+/* --------------------------------------------- */
+/* Actor/type guards                              */
+/* --------------------------------------------- */
+function isCharacterActor(actor) {
+  return !!actor && actor.type === "character";
+}
+
+function getActorFromSheetApp(appOrSheet) {
+  return appOrSheet?.actor ?? appOrSheet?.document ?? null;
+}
+
+function shouldRunForSheet(appOrSheet) {
+  const actor = getActorFromSheetApp(appOrSheet);
+  if (!isCharacterActor(actor)) return false;
+
+  // Optional: only run if the user can at least observe the actor
+  // (prevents weird injections on unowned actors in some setups)
+  if (!actor.testUserPermission(game.user, "OBSERVER")) return false;
+
+  return true;
 }
 
 /* --------------------------------------------- */
@@ -105,6 +125,10 @@ Hooks.once("init", () => {
   const original = ActorCls.prototype.getRollData;
   ActorCls.prototype.getRollData = function () {
     const data = original.call(this);
+
+    // Only attach willpower rollData for character actors
+    if (this?.type !== "character") return data;
+
     const level = getTotalLevel(this);
     const bonus = getWillpowerBonus(this);
     data.willpower = { level, bonus, total: level + bonus };
@@ -225,7 +249,7 @@ function getBellyFillPct(belly) {
 }
 
 /* --------------------------------------------- */
-/* UI block (boxed like your training cards)      */
+/* UI block                                       */
 /* --------------------------------------------- */
 function buildSidebarBlock(actor) {
   const wp = getWillpower(actor);
@@ -293,8 +317,7 @@ function buildSidebarBlock(actor) {
 }
 
 /* --------------------------------------------- */
-/* Placement: EXACTLY between Hit Dice & Favorites */
-/* (locks to the same sidebar column)             */
+/* Placement: between Hit Dice & Favorites        */
 /* --------------------------------------------- */
 function normalizeRoot(el) {
   if (!el) return null;
@@ -319,14 +342,13 @@ function findTextEl(scope, regex) {
 }
 
 function findSidebarColumnFromHitDice(root) {
-  // Find "Hit Dice" label anywhere, then walk up until we find an ancestor containing "Favorites"
   const hitDiceLabel = findTextEl(root, /^hit\s*dice$/i) || findTextEl(root, /hit\s*dice/i);
   if (!hitDiceLabel) return null;
 
   let el = hitDiceLabel.parentElement;
   while (el && el !== root) {
     const fav = findTextEl(el, /^favorites$/i) || findTextEl(el, /favorites/i);
-    if (fav) return el; // this is the tight column containing both
+    if (fav) return el;
     el = el.parentElement;
   }
   return null;
@@ -336,41 +358,40 @@ function injectBetweenHitDiceAndFavorites(sheet, rootRaw) {
   const root = normalizeRoot(rootRaw);
   if (!root || !sheet?.actor) return;
 
+  const actor = getActorFromSheetApp(sheet);
+  if (!isCharacterActor(actor)) return;
+
   ensureOnePieceStyles();
 
-  // Tight sidebar column (the one that actually has Hit Dice + Favorites)
   const sidebar = findSidebarColumnFromHitDice(root)
     || root.querySelector(".sidebar, .sheet-sidebar, aside, .left, .column.left, .actor-sidebar")
     || root;
 
   removeExisting(sidebar);
 
-  const html = buildSidebarBlock(sheet.actor);
+  const html = buildSidebarBlock(actor);
 
-  // Insert before the Favorites header inside that SAME sidebar
   const favEl = findTextEl(sidebar, /^favorites$/i) || findTextEl(sidebar, /favorites/i);
   if (favEl?.insertAdjacentHTML) {
     favEl.insertAdjacentHTML("beforebegin", html);
     return;
   }
 
-  // Fallback: after Hit Dice label/section
   const hdEl = findTextEl(sidebar, /^hit\s*dice$/i) || findTextEl(sidebar, /hit\s*dice/i);
   if (hdEl?.insertAdjacentHTML) {
     hdEl.insertAdjacentHTML("afterend", html);
     return;
   }
 
-  // Last resort
   sidebar.insertAdjacentHTML("afterbegin", html);
 }
 
 /* --------------------------------------------- */
-/* Convert dialog (live preview)                  */
+/* Convert dialog                                 */
 /* --------------------------------------------- */
 function openConvertDialog(sheet) {
-  const actor = sheet.actor;
-  if (!actor) return;
+  const actor = getActorFromSheetApp(sheet);
+  if (!actor || !isCharacterActor(actor)) return;
 
   const content = `
 <form class="onepiece-convert-form">
@@ -507,11 +528,11 @@ function bindDelegatedClicks(sheet, rootRaw) {
     const btn = ev.target.closest("[data-onepiece-action]");
     if (!btn) return;
 
+    const actor = getActorFromSheetApp(sheet);
+    if (!isCharacterActor(actor)) return;
+
     ev.preventDefault();
     ev.stopPropagation();
-
-    const actor = sheet.actor;
-    if (!actor) return;
 
     const action = btn.dataset.onepieceAction;
 
@@ -556,6 +577,7 @@ function bindDelegatedClicks(sheet, rootRaw) {
 /* Hooks (covers whatever sheet you’re on)        */
 /* --------------------------------------------- */
 function renderOnePiece(sheet, root) {
+  if (!shouldRunForSheet(sheet)) return;
   try {
     bindDelegatedClicks(sheet, root);
     injectBetweenHitDiceAndFavorites(sheet, root);
@@ -564,20 +586,13 @@ function renderOnePiece(sheet, root) {
   }
 }
 
-// Legacy dnd5e
 Hooks.on("renderActorSheet5eCharacter", (app, html) => renderOnePiece(app, html));
 Hooks.on("renderActorSheet5e", (app, html) => renderOnePiece(app, html));
-
-// AppV2
 Hooks.on("renderActorSheetV2", (sheet, element) => renderOnePiece(sheet, element));
-
-// Tidy
 Hooks.on("tidy5e-sheet.renderActorSheet", (sheet, element) => renderOnePiece(sheet, element));
 
-// Generic fallback
 Hooks.on("renderActorSheet", (app, html) => {
   if (game.system.id !== "dnd5e") return;
-  if (app?.actor?.type !== "character") return;
   renderOnePiece(app, html);
 });
 
