@@ -3,6 +3,7 @@ const MODULE_ID = "one-piece-supplement-module";
 
 // Exchange rates in "belly per unit"
 const BELLY_PER = { cp: 100, sp: 1000, ep: 5000, gp: 10000, pp: 100000 };
+const BELLY_PER_GP = 10000;
 
 /* --------------------------------------------- */
 /* Inline styles (so it ALWAYS looks like boxes)  */
@@ -33,6 +34,8 @@ function ensureOnePieceStyles() {
   text-transform:uppercase;opacity:.9;
 }
 .onepiece-op-title i{opacity:.9}
+
+.onepiece-op-btnrow{display:flex;align-items:center;gap:6px}
 
 .onepiece-op-iconbtn{
   width:26px;height:26px;border-radius:8px;
@@ -79,19 +82,13 @@ function ensureOnePieceStyles() {
 function isCharacterActor(actor) {
   return !!actor && actor.type === "character";
 }
-
 function getActorFromSheetApp(appOrSheet) {
   return appOrSheet?.actor ?? appOrSheet?.document ?? null;
 }
-
 function shouldRunForSheet(appOrSheet) {
   const actor = getActorFromSheetApp(appOrSheet);
   if (!isCharacterActor(actor)) return false;
-
-  // Optional: only run if the user can at least observe the actor
-  // (prevents weird injections on unowned actors in some setups)
   if (!actor.testUserPermission(game.user, "OBSERVER")) return false;
-
   return true;
 }
 
@@ -125,8 +122,6 @@ Hooks.once("init", () => {
   const original = ActorCls.prototype.getRollData;
   ActorCls.prototype.getRollData = function () {
     const data = original.call(this);
-
-    // Only attach willpower rollData for character actors
     if (this?.type !== "character") return data;
 
     const level = getTotalLevel(this);
@@ -164,6 +159,11 @@ function getWillpower(actor) {
 
 function getBelly(actor) {
   return Number(actor.getFlag(MODULE_ID, "belly") ?? 0) || 0;
+}
+async function addBelly(actor, deltaBelly) {
+  const cur = getBelly(actor);
+  const next = Math.max(0, Math.floor(cur + (Number(deltaBelly) || 0)));
+  await actor.setFlag(MODULE_ID, "belly", next);
 }
 
 function getActorCurrency(actor) {
@@ -249,7 +249,7 @@ function getBellyFillPct(belly) {
 }
 
 /* --------------------------------------------- */
-/* UI block                                       */
+/* UI block + NEW “Add Belly” button              */
 /* --------------------------------------------- */
 function buildSidebarBlock(actor) {
   const wp = getWillpower(actor);
@@ -265,6 +265,7 @@ function buildSidebarBlock(actor) {
   const bellyHint = t("ONEPIECE.BellyHint", "1 gp = 10,000 belly");
   const editLabel = t("ONEPIECE.Edit", "Edit");
   const convertLabel = t("ONEPIECE.Convert", "Convert");
+  const addLabel = t("ONEPIECE.AddBelly", "Add Belly");
 
   const wpTooltip = `@willpower.total (Level ${lvl} + Bonus ${wpBonus >= 0 ? "+" : ""}${wpBonus})`;
 
@@ -298,9 +299,19 @@ function buildSidebarBlock(actor) {
         <span>${bellyLabel}</span>
       </div>
 
-      <button type="button" class="onepiece-op-iconbtn" data-onepiece-action="open-convert" title="${convertLabel}">
-        <i class="fa-solid fa-arrow-right-arrow-left" aria-hidden="true"></i>
-      </button>
+      <div class="onepiece-op-btnrow">
+        <!-- NEW: Add belly button -->
+        <button type="button" class="onepiece-op-iconbtn"
+          data-onepiece-action="add-belly" title="${addLabel}">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+
+        <!-- Convert button -->
+        <button type="button" class="onepiece-op-iconbtn"
+          data-onepiece-action="open-convert" title="${convertLabel}">
+          <i class="fa-solid fa-arrow-right-arrow-left" aria-hidden="true"></i>
+        </button>
+      </div>
     </div>
 
     <div class="onepiece-op-value">${fmt(belly)}</div>
@@ -387,7 +398,94 @@ function injectBetweenHitDiceAndFavorites(sheet, rootRaw) {
 }
 
 /* --------------------------------------------- */
-/* Convert dialog                                 */
+/* NEW: Add Belly dialog (player/owner)           */
+/* --------------------------------------------- */
+function openAddBellyDialog(sheet) {
+  const actor = getActorFromSheetApp(sheet);
+  if (!actor || !isCharacterActor(actor)) return;
+
+  // Must have at least OWNER to update their actor
+  if (!actor.testUserPermission(game.user, "OWNER")) {
+    ui.notifications?.warn("You don't have permission to edit this actor's Belly.");
+    return;
+  }
+
+  const cur = getBelly(actor);
+
+  const title = t("ONEPIECE.AddBellyTitle", "Add Belly");
+  const labelAmount = t("ONEPIECE.Amount", "Amount");
+  const labelUnits = t("ONEPIECE.Units", "Units");
+  const unitsBelly = t("ONEPIECE.UnitsBelly", "Belly");
+  const unitsGp = t("ONEPIECE.UnitsGP", "GP (convert to Belly)");
+  const applyLabel = t("ONEPIECE.Apply", "Apply");
+  const cancelLabel = t("ONEPIECE.Cancel", "Cancel");
+
+  const content = `
+<form class="onepiece-addbelly-form">
+  <div class="form-group">
+    <label>${labelAmount}</label>
+    <input type="number" name="amount" step="1" value="0" />
+    <p class="notes">Current: <b>${fmt(cur)}</b> Belly</p>
+  </div>
+
+  <div class="form-group">
+    <label>${labelUnits}</label>
+    <select name="units">
+      <option value="belly">${unitsBelly}</option>
+      <option value="gp">${unitsGp}</option>
+    </select>
+    <p class="notes">If you choose GP, it converts using 1 gp = 10,000 belly.</p>
+  </div>
+
+  <hr/>
+  <div class="form-group">
+    <label>Preview</label>
+    <div class="onepiece-addbelly-preview" style="opacity:.85;"></div>
+  </div>
+</form>`;
+
+  function renderPreview($html) {
+    let amt = Number($html.find("input[name='amount']").val() ?? 0);
+    if (!Number.isFinite(amt)) amt = 0;
+    const units = String($html.find("select[name='units']").val() ?? "belly");
+    const delta = units === "gp" ? Math.floor(amt * BELLY_PER_GP) : Math.floor(amt);
+    const next = Math.max(0, cur + delta);
+
+    $html.find(".onepiece-addbelly-preview").html(
+      `<p>Change: <b>${delta >= 0 ? "+" : ""}${fmt(delta)}</b> Belly</p>
+       <p>Result: <b>${fmt(next)}</b> Belly</p>`
+    );
+  }
+
+  new Dialog({
+    title,
+    content,
+    buttons: {
+      apply: {
+        label: applyLabel,
+        callback: async ($html) => {
+          let amt = Number($html.find("input[name='amount']").val() ?? 0);
+          if (!Number.isFinite(amt)) amt = 0;
+          const units = String($html.find("select[name='units']").val() ?? "belly");
+          const delta = units === "gp" ? Math.floor(amt * BELLY_PER_GP) : Math.floor(amt);
+          await addBelly(actor, delta);
+          sheet.render?.(false);
+        }
+      },
+      cancel: { label: cancelLabel }
+    },
+    default: "apply",
+    render: ($html) => {
+      const trigger = () => renderPreview($html);
+      $html.on("input", "input[name='amount']", trigger);
+      $html.on("change", "select[name='units']", trigger);
+      trigger();
+    }
+  }).render(true);
+}
+
+/* --------------------------------------------- */
+/* Convert dialog (existing)                      */
 /* --------------------------------------------- */
 function openConvertDialog(sheet) {
   const actor = getActorFromSheetApp(sheet);
@@ -441,7 +539,6 @@ function openConvertDialog(sheet) {
       const zeroCoins = !!dlgHtml.find("input[name='zeroCoins']").prop("checked");
       const bellyGained = coinsToBellyValue(cur);
       const newBelly = existingBelly + bellyGained;
-
       const newCoins = zeroCoins ? { pp: 0, gp: 0, ep: 0, sp: 0, cp: 0 } : cur;
 
       previewHtml = `
@@ -567,14 +664,13 @@ function bindDelegatedClicks(sheet, rootRaw) {
       }).render(true);
     }
 
-    if (action === "open-convert") {
-      openConvertDialog(sheet);
-    }
+    if (action === "open-convert") openConvertDialog(sheet);
+    if (action === "add-belly") openAddBellyDialog(sheet);
   });
 }
 
 /* --------------------------------------------- */
-/* Hooks (covers whatever sheet you’re on)        */
+/* Hooks                                          */
 /* --------------------------------------------- */
 function renderOnePiece(sheet, root) {
   if (!shouldRunForSheet(sheet)) return;
@@ -595,4 +691,3 @@ Hooks.on("renderActorSheet", (app, html) => {
   if (game.system.id !== "dnd5e") return;
   renderOnePiece(app, html);
 });
-
