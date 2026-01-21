@@ -2,9 +2,9 @@
   "id": "one-piece-supplement-module",
   "title": "One Piece Supplement Module",
   "description": "<p>Adds Willpower and Belly (One Piece-style currency) to dnd5e actor sheets.</p>",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "manifest": "https://github.com/direbun/One-Piece-Supplement-Module/releases/latest/download/module.json",
-  "download": "https://github.com/direbun/One-Piece-Supplement-Module/releases/download/2.0.1/module.zip",
+  "download": "https://github.com/direbun/One-Piece-Supplement-Module/releases/download/2.0.2/module.zip",
   "authors": [
     {
       "name": "Direbunny20",
