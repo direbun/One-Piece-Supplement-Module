@@ -5,9 +5,6 @@ const MODULE_ID = "one-piece-supplement-module";
 const BELLY_PER = { cp: 100, sp: 1000, ep: 5000, gp: 10000, pp: 100000 };
 const BELLY_PER_GP = 10000;
 
-/* --------------------------------------------- */
-/* Inline styles (so it ALWAYS looks like boxes)  */
-/* --------------------------------------------- */
 function ensureOnePieceStyles() {
   const id = "onepiece-supplement-inline-styles";
   if (document.getElementById(id)) return;
@@ -76,9 +73,6 @@ function ensureOnePieceStyles() {
   document.head.appendChild(style);
 }
 
-/* --------------------------------------------- */
-/* Actor/type guards                              */
-/* --------------------------------------------- */
 function isCharacterActor(actor) {
   return !!actor && actor.type === "character";
 }
@@ -92,9 +86,6 @@ function shouldRunForSheet(appOrSheet) {
   return true;
 }
 
-/* --------------------------------------------- */
-/* init: settings + roll-data (@willpower.*)      */
-/* --------------------------------------------- */
 Hooks.once("ready", () => ensureOnePieceStyles());
 
 Hooks.once("init", () => {
@@ -112,7 +103,29 @@ Hooks.once("init", () => {
     });
   } catch (_) {}
 
-  // Roll data injection for formulas: @willpower.level / @willpower.bonus / @willpower.total
+  // Which dnd5e Resource slot is used for Hybrid Points (for Activity Consumption)
+  // Default: tertiary (least likely to clash)
+  try {
+    game.settings.register(MODULE_ID, "hybridResourceSlot", {
+      name: "Hybrid Points Resource Slot",
+      hint:
+        "Hybrid Points will sync into this dnd5e Resource slot so Activities can consume them (Consumption → Type: Resource).",
+      scope: "world",
+      config: true,
+      type: String,
+      choices: {
+        primary: "Primary Resource",
+        secondary: "Secondary Resource",
+        tertiary: "Tertiary Resource"
+      },
+      default: "tertiary"
+    });
+  } catch (_) {}
+
+  // Roll data injection for formulas:
+  // @willpower.level / @willpower.bonus / @willpower.total
+  // @hybrid.points.value / @hybrid.points.max
+  // (legacy alias) @willpower.charges.value / @willpower.charges.max
   const ActorCls = CONFIG.Actor?.documentClass;
   if (!ActorCls?.prototype?.getRollData) return;
 
@@ -127,13 +140,23 @@ Hooks.once("init", () => {
     const level = getTotalLevel(this);
     const bonus = getWillpowerBonus(this);
     data.willpower = { level, bonus, total: level + bonus };
+
+    if (isHybrid(this)) {
+      const max = getHybridPointsMax(this);
+      const value = Math.max(0, Math.min(max, getHybridPoints(this)));
+
+      data.hybrid = data.hybrid ?? {};
+      data.hybrid.points = { value, max };
+
+      // Legacy alias (old name)
+      data.willpower = data.willpower ?? {};
+      data.willpower.charges = { value, max };
+    }
+
     return data;
   };
 });
 
-/* --------------------------------------------- */
-/* data helpers                                   */
-/* --------------------------------------------- */
 function getTotalLevel(actor) {
   const direct = foundry.utils.getProperty(actor, "system.details.level");
   if (Number.isFinite(direct)) return direct;
@@ -156,6 +179,126 @@ function getWillpowerBonus(actor) {
 function getWillpower(actor) {
   return getTotalLevel(actor) + getWillpowerBonus(actor);
 }
+
+function isHybrid(actor) {
+  if (!actor) return false;
+
+  // Fast path: Midi-QOL exposes identifiedItems map
+  try {
+    if (actor.identifiedItems?.has?.("hybrid")) return true;
+  } catch (_) {}
+
+  // Check class items by name
+  try {
+    const classes = actor.items?.filter?.((i) => i.type === "class") ?? [];
+    if (classes.some((c) => String(c.name ?? "").toLowerCase() === "hybrid")) return true;
+  } catch (_) {}
+
+  // Fallback: dnd5e system.classes entries
+  try {
+    const classesObj = foundry.utils.getProperty(actor, "system.classes") ?? {};
+    if (Object.values(classesObj).some((c) => String(c?.name ?? "").toLowerCase() === "hybrid")) return true;
+  } catch (_) {}
+
+  return false;
+}
+
+// Stored on actor flag: flags.one-piece-supplement-module.hybridCharges
+function getHybridPoints(actor) {
+  return Number(actor.getFlag(MODULE_ID, "hybridCharges") ?? 0) || 0;
+}
+
+async function setHybridPoints(actor, value) {
+  const max = getHybridPointsMax(actor);
+  const next = Math.max(0, Math.min(max, Math.floor(Number(value) || 0)));
+  await actor.setFlag(MODULE_ID, "hybridCharges", next);
+  await syncHybridPointsResource(actor); // keep resource in sync for Activity Consumption
+}
+
+function getHybridPointsMax(actor) {
+  const lvl = getTotalLevel(actor);
+  if (lvl <= 1) return 2;
+  if (lvl <= 3) return 3;
+  if (lvl <= 5) return 4;
+  if (lvl <= 7) return 5;
+  if (lvl <= 9) return 6;
+  if (lvl <= 11) return 7;
+  if (lvl <= 13) return 8;
+  if (lvl <= 15) return 9;
+  return 10;
+}
+
+function getChargesFillPct(current, max) {
+  const m = Math.max(1, Number(max) || 1);
+  const c = Math.max(0, Math.min(m, Number(current) || 0));
+  return Math.max(0, Math.min(100, (c / m) * 100));
+}
+
+function getHybridResourceSlot() {
+  try {
+    const slot = String(game.settings.get(MODULE_ID, "hybridResourceSlot") || "tertiary");
+    if (slot === "primary" || slot === "secondary" || slot === "tertiary") return slot;
+  } catch (_) {}
+  return "tertiary";
+}
+
+async function syncHybridPointsResource(actor) {
+  try {
+    if (!isCharacterActor(actor) || !isHybrid(actor)) return;
+
+    const slot = getHybridResourceSlot();
+    const max = getHybridPointsMax(actor);
+    const value = Math.max(0, Math.min(max, getHybridPoints(actor)));
+
+    // Avoid unnecessary updates
+    const cur = foundry.utils.getProperty(actor, `system.resources.${slot}`) ?? {};
+    const curLabel = String(cur.label ?? "");
+    const curMax = Number(cur.max ?? 0) || 0;
+    const curVal = Number(cur.value ?? 0) || 0;
+
+    if (curLabel === "Hybrid Points" && curMax === max && curVal === value) return;
+
+    await actor.update({
+      [`system.resources.${slot}.label`]: "Hybrid Points",
+      [`system.resources.${slot}.max`]: max,
+      [`system.resources.${slot}.value`]: value
+    });
+  } catch (e) {
+    console.warn(`${MODULE_ID} | syncHybridPointsResource failed`, e);
+  }
+}
+
+Hooks.on("preUpdateActor", (actor, update) => {
+  try {
+    if (game.system.id !== "dnd5e") return;
+    if (!isCharacterActor(actor) || !isHybrid(actor)) return;
+
+    const slot = getHybridResourceSlot();
+
+    const vPath = `system.resources.${slot}.value`;
+    const newValRaw = foundry.utils.getProperty(update, vPath);
+    if (newValRaw === undefined) return;
+
+    const max = getHybridPointsMax(actor);
+    const newVal = Math.max(0, Math.min(max, Math.floor(Number(newValRaw) || 0)));
+
+    // Keep the canonical flag updated in the SAME update payload
+    foundry.utils.setProperty(update, `flags.${MODULE_ID}.hybridCharges`, newVal);
+
+    // Ensure label/max consistency unless caller is already setting them
+    const labelPath = `system.resources.${slot}.label`;
+    const maxPath = `system.resources.${slot}.max`;
+
+    if (foundry.utils.getProperty(update, labelPath) === undefined) {
+      foundry.utils.setProperty(update, labelPath, "Hybrid Points");
+    }
+    if (foundry.utils.getProperty(update, maxPath) === undefined) {
+      foundry.utils.setProperty(update, maxPath, max);
+    }
+  } catch (e) {
+    console.warn(`${MODULE_ID} | preUpdateActor hybrid sync failed`, e);
+  }
+});
 
 function getBelly(actor) {
   return Number(actor.getFlag(MODULE_ID, "belly") ?? 0) || 0;
@@ -248,9 +391,6 @@ function getBellyFillPct(belly) {
   return Math.max(0, Math.min(100, (belly / cap) * 100));
 }
 
-/* --------------------------------------------- */
-/* UI block + NEW “Add Belly” button              */
-/* --------------------------------------------- */
 function buildSidebarBlock(actor) {
   const wp = getWillpower(actor);
   const wpBonus = getWillpowerBonus(actor);
@@ -258,9 +398,16 @@ function buildSidebarBlock(actor) {
   const belly = getBelly(actor);
   const fillPct = getBellyFillPct(belly);
 
+  const showHybrid = isHybrid(actor);
+  const pointsMax = showHybrid ? getHybridPointsMax(actor) : 0;
+  const pointsCur = showHybrid ? Math.max(0, Math.min(pointsMax, getHybridPoints(actor))) : 0;
+  const pointsPct = showHybrid ? getChargesFillPct(pointsCur, pointsMax) : 0;
+
   const canEditWP = game.user.isGM;
 
   const willpowerLabel = t("ONEPIECE.Willpower", "Willpower");
+  const pointsLabel = t("ONEPIECE.HybridPoints", "Hybrid Points");
+  const pointsHint = t("ONEPIECE.HybridPointsHint", "Resets on Long Rest");
   const bellyLabel = t("ONEPIECE.Belly", "Belly");
   const bellyHint = t("ONEPIECE.BellyHint", "1 gp = 10,000 belly");
   const editLabel = t("ONEPIECE.Edit", "Edit");
@@ -292,6 +439,36 @@ function buildSidebarBlock(actor) {
     <div class="onepiece-op-sub">Level ${lvl} • Bonus ${wpBonus >= 0 ? "+" : ""}${wpBonus}</div>
   </div>
 
+  ${
+    showHybrid
+      ? `
+  <div class="onepiece-op-card">
+    <div class="onepiece-op-head">
+      <div class="onepiece-op-title" title="@hybrid.points.value / @hybrid.points.max">
+        <i class="fa-solid fa-bolt" aria-hidden="true"></i>
+        <span>${pointsLabel}</span>
+      </div>
+
+      <div class="onepiece-op-btnrow">
+        <button type="button" class="onepiece-op-iconbtn" data-onepiece-action="points-minus" title="-1">
+          <i class="fa-solid fa-minus" aria-hidden="true"></i>
+        </button>
+        <button type="button" class="onepiece-op-iconbtn" data-onepiece-action="points-plus" title="+1">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="onepiece-op-value">${fmt(pointsCur)}<span style="opacity:.65;font-size:18px;font-weight:800;"> / ${fmt(pointsMax)}</span></div>
+    <div class="onepiece-op-bankbar" aria-hidden="true">
+      <div class="onepiece-op-bankfill" style="width:${pointsPct}%;"></div>
+    </div>
+    <div class="onepiece-op-sub">${pointsHint}</div>
+  </div>
+  `
+      : ""
+  }
+
   <div class="onepiece-op-card">
     <div class="onepiece-op-head">
       <div class="onepiece-op-title">
@@ -300,13 +477,11 @@ function buildSidebarBlock(actor) {
       </div>
 
       <div class="onepiece-op-btnrow">
-        <!-- NEW: Add belly button -->
         <button type="button" class="onepiece-op-iconbtn"
           data-onepiece-action="add-belly" title="${addLabel}">
           <i class="fa-solid fa-plus" aria-hidden="true"></i>
         </button>
 
-        <!-- Convert button -->
         <button type="button" class="onepiece-op-iconbtn"
           data-onepiece-action="open-convert" title="${convertLabel}">
           <i class="fa-solid fa-arrow-right-arrow-left" aria-hidden="true"></i>
@@ -327,13 +502,10 @@ function buildSidebarBlock(actor) {
 `;
 }
 
-/* --------------------------------------------- */
-/* Placement: between Hit Dice & Favorites        */
-/* --------------------------------------------- */
 function normalizeRoot(el) {
   if (!el) return null;
   if (el instanceof HTMLElement) return el;
-  if (el?.[0] instanceof HTMLElement) return el[0]; // jQuery
+  if (el?.[0] instanceof HTMLElement) return el[0];
   return null;
 }
 
@@ -374,9 +546,10 @@ function injectBetweenHitDiceAndFavorites(sheet, rootRaw) {
 
   ensureOnePieceStyles();
 
-  const sidebar = findSidebarColumnFromHitDice(root)
-    || root.querySelector(".sidebar, .sheet-sidebar, aside, .left, .column.left, .actor-sidebar")
-    || root;
+  const sidebar =
+    findSidebarColumnFromHitDice(root) ||
+    root.querySelector(".sidebar, .sheet-sidebar, aside, .left, .column.left, .actor-sidebar") ||
+    root;
 
   removeExisting(sidebar);
 
@@ -397,14 +570,10 @@ function injectBetweenHitDiceAndFavorites(sheet, rootRaw) {
   sidebar.insertAdjacentHTML("afterbegin", html);
 }
 
-/* --------------------------------------------- */
-/* NEW: Add Belly dialog (player/owner)           */
-/* --------------------------------------------- */
 function openAddBellyDialog(sheet) {
   const actor = getActorFromSheetApp(sheet);
   if (!actor || !isCharacterActor(actor)) return;
 
-  // Must have at least OWNER to update their actor
   if (!actor.testUserPermission(game.user, "OWNER")) {
     ui.notifications?.warn("You don't have permission to edit this actor's Belly.");
     return;
@@ -484,9 +653,6 @@ function openAddBellyDialog(sheet) {
   }).render(true);
 }
 
-/* --------------------------------------------- */
-/* Convert dialog (existing)                      */
-/* --------------------------------------------- */
 function openConvertDialog(sheet) {
   const actor = getActorFromSheetApp(sheet);
   if (!actor || !isCharacterActor(actor)) return;
@@ -518,64 +684,56 @@ function openConvertDialog(sheet) {
   <hr/>
 
   <div class="onepiece-preview-block">
-    <h3 style="margin:0 0 6px 0;">${game.i18n.localize("ONEPIECE.Preview")}</h3>
-    <div class="onepiece-preview"></div>
+    <div class="form-group">
+      <label>${game.i18n.localize("ONEPIECE.Preview")}</label>
+      <div class="onepiece-preview"></div>
+    </div>
   </div>
 </form>`;
 
-  const updatePreview = (dlgHtml) => {
-    const dir = String(dlgHtml.find("select[name='direction']").val() ?? "coinsToBelly");
-    const coinsOpt = dlgHtml.find(".onepiece-opt-coins");
-    const bellyOpt = dlgHtml.find(".onepiece-opt-belly");
+  function updatePreview($dlg) {
+    const actor = getActorFromSheetApp(sheet);
+    const dir = $dlg.find("select[name='direction']").val();
 
-    if (dir === "coinsToBelly") { coinsOpt.show(); bellyOpt.hide(); }
-    else { coinsOpt.hide(); bellyOpt.show(); }
+    const curCoins = getActorCurrency(actor);
+    const curBelly = getBelly(actor);
 
-    const existingBelly = getBelly(actor);
-    const cur = getActorCurrency(actor);
-
-    let previewHtml = "";
     if (dir === "coinsToBelly") {
-      const zeroCoins = !!dlgHtml.find("input[name='zeroCoins']").prop("checked");
-      const bellyGained = coinsToBellyValue(cur);
-      const newBelly = existingBelly + bellyGained;
-      const newCoins = zeroCoins ? { pp: 0, gp: 0, ep: 0, sp: 0, cp: 0 } : cur;
+      $dlg.find(".onepiece-opt-coins").show();
+      $dlg.find(".onepiece-opt-belly").hide();
 
-      previewHtml = `
-<p><b>${game.i18n.localize("ONEPIECE.Current")}</b> — Belly: ${fmt(existingBelly)} | pp:${cur.pp} gp:${cur.gp} ep:${cur.ep} sp:${cur.sp} cp:${cur.cp}</p>
-<p><b>${game.i18n.localize("ONEPIECE.Change")}</b> — +${fmt(bellyGained)} Belly</p>
-<p><b>${game.i18n.localize("ONEPIECE.Result")}</b> — Belly: ${fmt(newBelly)} | pp:${newCoins.pp} gp:${newCoins.gp} ep:${newCoins.ep} sp:${newCoins.sp} cp:${newCoins.cp}</p>`;
+      const zeroCoins = !!$dlg.find("input[name='zeroCoins']").prop("checked");
+      const bellyGained = coinsToBellyValue(curCoins);
+      const afterBelly = curBelly + bellyGained;
+
+      $dlg.find(".onepiece-preview").html(`
+        <p>${game.i18n.localize("ONEPIECE.Current")}: Belly <b>${fmt(curBelly)}</b></p>
+        <p>${game.i18n.localize("ONEPIECE.Change")}: +<b>${fmt(bellyGained)}</b> Belly</p>
+        <p>${game.i18n.localize("ONEPIECE.Result")}: Belly <b>${fmt(afterBelly)}</b></p>
+        ${zeroCoins ? `<p class="notes">Coins will be set to 0 after converting.</p>` : ""}
+      `);
     } else {
-      let amount = dlgHtml.find("input[name='bellyAmount']").val();
-      amount = amount === "" || amount === null ? existingBelly : Number(amount);
-      if (!Number.isFinite(amount)) amount = existingBelly;
-      amount = Math.max(0, Math.min(existingBelly, Math.floor(amount)));
+      $dlg.find(".onepiece-opt-coins").hide();
+      $dlg.find(".onepiece-opt-belly").show();
+
+      let amount = $dlg.find("input[name='bellyAmount']").val();
+      amount = amount === "" || amount === null ? curBelly : Number(amount);
+      if (!Number.isFinite(amount)) amount = curBelly;
+
+      amount = Math.max(0, Math.min(curBelly, Math.floor(amount)));
 
       const breakdown = bellyToCoinsBreakdown(amount);
       const convertible = amount - breakdown.remainderBelly;
+      const afterBelly = curBelly - convertible;
 
-      const newBelly = existingBelly - convertible;
-      const newCoins = {
-        pp: cur.pp + breakdown.pp,
-        gp: cur.gp + breakdown.gp,
-        ep: cur.ep + breakdown.ep,
-        sp: cur.sp + breakdown.sp,
-        cp: cur.cp + breakdown.cp
-      };
-
-      previewHtml = `
-<p><b>${game.i18n.localize("ONEPIECE.Current")}</b> — Belly: ${fmt(existingBelly)} | pp:${cur.pp} gp:${cur.gp} ep:${cur.ep} sp:${cur.sp} cp:${cur.cp}</p>
-<p><b>${game.i18n.localize("ONEPIECE.ConvertedBelly")}</b> — ${fmt(convertible)} Belly ${
-        breakdown.remainderBelly
-          ? `(${fmt(breakdown.remainderBelly)} ${game.i18n.localize("ONEPIECE.RemainderStays")})`
-          : ""
-      }</p>
-<p><b>${game.i18n.localize("ONEPIECE.CoinsGained")}</b> — pp:+${breakdown.pp} gp:+${breakdown.gp} ep:+${breakdown.ep} sp:+${breakdown.sp} cp:+${breakdown.cp}</p>
-<p><b>${game.i18n.localize("ONEPIECE.Result")}</b> — Belly: ${fmt(newBelly)} | pp:${newCoins.pp} gp:${newCoins.gp} ep:${newCoins.ep} sp:${newCoins.sp} cp:${newCoins.cp}</p>`;
+      $dlg.find(".onepiece-preview").html(`
+        <p>${game.i18n.localize("ONEPIECE.Current")}: Belly <b>${fmt(curBelly)}</b></p>
+        <p>${game.i18n.localize("ONEPIECE.ConvertedBelly")}: <b>${fmt(convertible)}</b> Belly <span class="notes">(${game.i18n.localize("ONEPIECE.RemainderStays")}: ${fmt(breakdown.remainderBelly)})</span></p>
+        <p>${game.i18n.localize("ONEPIECE.CoinsGained")}: pp ${fmt(breakdown.pp)} gp ${fmt(breakdown.gp)} ep ${fmt(breakdown.ep)} sp ${fmt(breakdown.sp)} cp ${fmt(breakdown.cp)}</p>
+        <p>${game.i18n.localize("ONEPIECE.Result")}: Belly <b>${fmt(afterBelly)}</b></p>
+      `);
     }
-
-    dlgHtml.find(".onepiece-preview").html(previewHtml);
-  };
+  }
 
   new Dialog({
     title: game.i18n.localize("ONEPIECE.ConvertTitle"),
@@ -584,7 +742,8 @@ function openConvertDialog(sheet) {
       apply: {
         label: game.i18n.localize("ONEPIECE.Apply"),
         callback: async (dlgHtml) => {
-          const dir = String(dlgHtml.find("select[name='direction']").val() ?? "coinsToBelly");
+          const actor = getActorFromSheetApp(sheet);
+          const dir = dlgHtml.find("select[name='direction']").val();
 
           if (dir === "coinsToBelly") {
             const zeroCoins = !!dlgHtml.find("input[name='zeroCoins']").prop("checked");
@@ -613,9 +772,6 @@ function openConvertDialog(sheet) {
   }).render(true);
 }
 
-/* --------------------------------------------- */
-/* Click handler                                  */
-/* --------------------------------------------- */
 function bindDelegatedClicks(sheet, rootRaw) {
   const root = normalizeRoot(rootRaw);
   if (!root || root.dataset.onepieceBound === "1") return;
@@ -666,17 +822,35 @@ function bindDelegatedClicks(sheet, rootRaw) {
 
     if (action === "open-convert") openConvertDialog(sheet);
     if (action === "add-belly") openAddBellyDialog(sheet);
+
+    // Hybrid Points controls
+    if (action === "points-plus" || action === "points-minus") {
+      if (!isHybrid(actor)) return;
+      if (!actor.testUserPermission(game.user, "OWNER")) {
+        ui.notifications?.warn("You don't have permission to edit this actor's Hybrid Points.");
+        return;
+      }
+      const cur = getHybridPoints(actor);
+      const next = cur + (action === "points-plus" ? 1 : -1);
+      await setHybridPoints(actor, next);
+      sheet.render?.(false);
+      sheet.render?.({ force: false });
+    }
   });
 }
 
-/* --------------------------------------------- */
-/* Hooks                                          */
-/* --------------------------------------------- */
-function renderOnePiece(sheet, root) {
+async function renderOnePiece(sheet, root) {
   if (!shouldRunForSheet(sheet)) return;
+
   try {
     bindDelegatedClicks(sheet, root);
     injectBetweenHitDiceAndFavorites(sheet, root);
+
+    // Keep resource slot synced so Activity Consumption works.
+    const actor = getActorFromSheetApp(sheet);
+    if (isCharacterActor(actor) && isHybrid(actor)) {
+      await syncHybridPointsResource(actor);
+    }
   } catch (e) {
     console.error(`${MODULE_ID} | render failed`, e);
   }
@@ -691,3 +865,144 @@ Hooks.on("renderActorSheet", (app, html) => {
   if (game.system.id !== "dnd5e") return;
   renderOnePiece(app, html);
 });
+
+function isLongRestResult(result) {
+  if (!result) return false;
+  if (result.longRest === true) return true;
+  const t = String(result.type ?? result.restType ?? result.kind ?? "").toLowerCase();
+  if (t.includes("long")) return true;
+  return false;
+}
+
+Hooks.on("dnd5e.restCompleted", async (actor, result) => {
+  try {
+    if (!isCharacterActor(actor) || !isHybrid(actor)) return;
+    if (!isLongRestResult(result)) return;
+    await setHybridPoints(actor, 0);
+  } catch (e) {
+    console.error(`${MODULE_ID} | failed to reset hybrid points on restCompleted`, e);
+  }
+});
+
+Hooks.on("dnd5e.longRest", async (actor, result) => {
+  try {
+    if (!isCharacterActor(actor) || !isHybrid(actor)) return;
+    await setHybridPoints(actor, 0);
+  } catch (e) {
+    console.error(`${MODULE_ID} | failed to reset hybrid points on longRest`, e);
+  }
+});
+
+const ONEPIECE_HYBRID_ON_HIT = {
+  ENABLED: true,
+  AMOUNT_ON_HIT: 1,
+  CRIT_DOUBLES: false,
+  REQUIRE_MELEE: true,
+  REQUIRE_WEAPON: true,
+  SHOW_TOASTS: false,
+  DEBUG: false
+};
+
+function opToast(type, msg) {
+  if (!ONEPIECE_HYBRID_ON_HIT.SHOW_TOASTS) return;
+  ui.notifications?.[type]?.(msg);
+}
+
+function opIsCrit(workflow) {
+  return Boolean(
+    workflow?.isCritical ||
+    workflow?.critical ||
+    workflow?.attackRoll?.isCritical ||
+    workflow?.attackRoll?.terms?.some?.(t => t?.isCritical)
+  );
+}
+
+function opBestEffortIsMelee(workflow) {
+  const item = workflow?.item;
+  if (!item) return false;
+
+  const actionType = String(item?.system?.actionType ?? "").toLowerCase();
+  if (actionType === "mwak") return true;
+  if (actionType === "rwak") return false;
+
+  const rangeVal =
+    item?.system?.range?.value ??
+    item?.system?.range?.reach ??
+    null;
+
+  const r = Number(rangeVal);
+  if (Number.isFinite(r)) return r <= 5;
+
+  const name = String(item?.name ?? "").toLowerCase();
+  if (name.includes("ranged")) return false;
+  if (name.includes("melee")) return true;
+
+  return true;
+}
+
+function opIsWeaponAttack(workflow) {
+  const item = workflow?.item;
+  if (!item) return false;
+
+  const type = String(item.type ?? "").toLowerCase();
+  if (type === "weapon") return true;
+
+  const actionType = String(item?.system?.actionType ?? "").toLowerCase();
+  if (actionType === "mwak" || actionType === "rwak") return true;
+
+  return false;
+}
+
+function opGetHitInfo(workflow) {
+  const hitTargetsSize = workflow?.hitTargets?.size ?? 0;
+  const dmgCount = Array.isArray(workflow?.damageList) ? workflow.damageList.length : 0;
+  const hitCount = Math.max(hitTargetsSize, dmgCount);
+  return { hit: hitCount > 0, hitCount };
+}
+
+function opAlreadyApplied(workflow) {
+  if (!workflow) return true;
+  if (workflow.__onepieceHybridGainApplied) return true;
+  workflow.__onepieceHybridGainApplied = true;
+  return false;
+}
+
+async function opAwardHybridPoints(actor, amount) {
+  const max = getHybridPointsMax(actor);
+  const cur = getHybridPoints(actor);
+  const next = Math.max(0, Math.min(max, cur + amount));
+  if (next === cur) return;
+  await setHybridPoints(actor, next);
+}
+
+Hooks.on("midi-qol.DamageRollComplete", async (workflow) => {
+  try {
+    if (!ONEPIECE_HYBRID_ON_HIT.ENABLED) return;
+    if (!workflow) return;
+    if (!globalThis.MidiQOL) return;
+
+    const actor = workflow?.actor;
+    if (!isCharacterActor(actor) || !isHybrid(actor)) return;
+
+    if (ONEPIECE_HYBRID_ON_HIT.REQUIRE_WEAPON && !opIsWeaponAttack(workflow)) return;
+    if (ONEPIECE_HYBRID_ON_HIT.REQUIRE_MELEE && !opBestEffortIsMelee(workflow)) return;
+
+    const { hit, hitCount } = opGetHitInfo(workflow);
+    if (!hit) return;
+
+    if (opAlreadyApplied(workflow)) return;
+
+    const crit = opIsCrit(workflow);
+    const base = ONEPIECE_HYBRID_ON_HIT.AMOUNT_ON_HIT;
+    const amount = (crit && ONEPIECE_HYBRID_ON_HIT.CRIT_DOUBLES) ? (base * 2) : base;
+
+    await opAwardHybridPoints(actor, amount);
+
+    if (ONEPIECE_HYBRID_ON_HIT.SHOW_TOASTS) {
+      opToast("info", `${actor.name}: +${amount} Hybrid Point${amount === 1 ? "" : "s"} (hit ${hitCount}${crit ? ", crit" : ""})`);
+    }
+  } catch (e) {
+    console.error(`${MODULE_ID} | hybrid on-hit award failed`, e);
+  }
+});
+

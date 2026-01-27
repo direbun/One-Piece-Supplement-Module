@@ -7,13 +7,11 @@
     "Edit": "Edit",
     "Convert": "Convert",
     "BellyHint": "1 gp = 10,000 belly",
-
     "EditWillpower": "Edit Willpower",
     "WillpowerBonus": "Willpower Bonus",
     "WillpowerBonusHint": "This bonus is added on top of level. Willpower = Level + Bonus.",
     "Save": "Save",
     "Cancel": "Cancel",
-
     "ConvertTitle": "Belly Converter",
     "ConvertDirection": "Conversion Direction",
     "CoinsToBelly": "Coins → Belly",
@@ -29,6 +27,16 @@
     "ConvertedBelly": "Converted Belly",
     "RemainderStays": "remainder stays as belly",
     "CoinsGained": "Coins gained",
-    "Apply": "Apply"
+    "Apply": "Apply",
+    "WillpowerCharges": "Willpower Charges",
+    "WillpowerChargesHint": "Resets on Long Rest",
+    "HybridPoints": "Hybrid Points",
+    "HybridPointsHint": "Resets on Long Rest",
+    "AddBelly": "Add Belly",
+    "AddBellyTitle": "Add Belly",
+    "Amount": "Amount",
+    "Units": "Units",
+    "UnitsBelly": "Belly",
+    "UnitsGP": "GP (convert to Belly)"
   }
 }
