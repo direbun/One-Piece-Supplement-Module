@@ -5,74 +5,6 @@ const MODULE_ID = "one-piece-supplement-module";
 const BELLY_PER = { cp: 100, sp: 1000, ep: 5000, gp: 10000, pp: 100000 };
 const BELLY_PER_GP = 10000;
 
-function ensureOnePieceStyles() {
-  const id = "onepiece-supplement-inline-styles";
-  if (document.getElementById(id)) return;
-
-  const css = `
-.onepiece-op-root{margin:6px 6px 8px;display:flex;flex-direction:column;gap:8px}
-.onepiece-op-root,.onepiece-op-root *{pointer-events:auto}
-
-.onepiece-op-card{
-  border-radius:12px;
-  padding:10px 10px 9px;
-  border:1px solid rgba(255,255,255,.14);
-  background:linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.02));
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,.35), 0 1px 0 rgba(0,0,0,.35);
-}
-
-.onepiece-op-head{
-  display:flex;align-items:center;justify-content:space-between;gap:10px;
-  margin-bottom:6px;
-}
-.onepiece-op-title{
-  display:flex;align-items:center;gap:8px;
-  font-size:11px;font-weight:800;letter-spacing:.6px;
-  text-transform:uppercase;opacity:.9;
-}
-.onepiece-op-title i{opacity:.9}
-
-.onepiece-op-btnrow{display:flex;align-items:center;gap:6px}
-
-.onepiece-op-iconbtn{
-  width:26px;height:26px;border-radius:8px;
-  border:1px solid rgba(255,255,255,.14);
-  background:rgba(0,0,0,.18);
-  display:inline-flex;align-items:center;justify-content:center;
-  cursor:pointer;
-}
-.onepiece-op-iconbtn i{font-size:13px;opacity:.95}
-
-.onepiece-op-value{
-  font-size:26px;font-weight:900;line-height:1.05;
-  letter-spacing:.2px;
-}
-.onepiece-op-sub{
-  margin-top:4px;
-  font-size:11px;opacity:.75;
-}
-
-/* Belly “bank bar” (neutral) */
-.onepiece-op-bankbar{
-  margin-top:7px;
-  height:12px;border-radius:999px;overflow:hidden;
-  border:1px solid rgba(255,255,255,.14);
-  background:rgba(0,0,0,.25);
-}
-.onepiece-op-bankfill{
-  height:100%;
-  background:linear-gradient(90deg, rgba(255,255,255,.22), rgba(255,255,255,.10));
-}
-
-.tidy5e-sheet .onepiece-op-card{padding:9px 9px 8px}
-`;
-
-  const style = document.createElement("style");
-  style.id = id;
-  style.textContent = css;
-  document.head.appendChild(style);
-}
-
 function isCharacterActor(actor) {
   return !!actor && actor.type === "character";
 }
@@ -428,7 +360,7 @@ function buildSidebarBlock(actor) {
 
       ${
         canEditWP
-          ? `<button type="button" class="onepiece-op-iconbtn" data-onepiece-action="edit-willpower" title="${editLabel}">
+          ? `<button type="button" class="onepiece-op-iconbtn" data-onepiece-action="edit-willpower" title="${editLabel}" aria-label="${editLabel}">
                <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
              </button>`
           : ""
@@ -450,16 +382,16 @@ function buildSidebarBlock(actor) {
       </div>
 
       <div class="onepiece-op-btnrow">
-        <button type="button" class="onepiece-op-iconbtn" data-onepiece-action="points-minus" title="-1">
+        <button type="button" class="onepiece-op-iconbtn" data-onepiece-action="points-minus" title="-1" aria-label="${pointsLabel}: -1">
           <i class="fa-solid fa-minus" aria-hidden="true"></i>
         </button>
-        <button type="button" class="onepiece-op-iconbtn" data-onepiece-action="points-plus" title="+1">
+        <button type="button" class="onepiece-op-iconbtn" data-onepiece-action="points-plus" title="+1" aria-label="${pointsLabel}: +1">
           <i class="fa-solid fa-plus" aria-hidden="true"></i>
         </button>
       </div>
     </div>
 
-    <div class="onepiece-op-value">${fmt(pointsCur)}<span style="opacity:.65;font-size:18px;font-weight:800;"> / ${fmt(pointsMax)}</span></div>
+    <div class="onepiece-op-value">${fmt(pointsCur)}<span class="onepiece-op-max"> / ${fmt(pointsMax)}</span></div>
     <div class="onepiece-op-bankbar" aria-hidden="true">
       <div class="onepiece-op-bankfill" style="width:${pointsPct}%;"></div>
     </div>
@@ -478,12 +410,12 @@ function buildSidebarBlock(actor) {
 
       <div class="onepiece-op-btnrow">
         <button type="button" class="onepiece-op-iconbtn"
-          data-onepiece-action="add-belly" title="${addLabel}">
+          data-onepiece-action="add-belly" title="${addLabel}" aria-label="${addLabel}">
           <i class="fa-solid fa-plus" aria-hidden="true"></i>
         </button>
 
         <button type="button" class="onepiece-op-iconbtn"
-          data-onepiece-action="open-convert" title="${convertLabel}">
+          data-onepiece-action="open-convert" title="${convertLabel}" aria-label="${convertLabel}">
           <i class="fa-solid fa-arrow-right-arrow-left" aria-hidden="true"></i>
         </button>
       </div>
@@ -513,61 +445,38 @@ function removeExisting(sidebar) {
   sidebar.querySelectorAll("[data-onepiece-root]").forEach((el) => el.remove());
 }
 
-function findTextEl(scope, regex) {
-  const nodes = scope.querySelectorAll("div,span,label,small,header,h2,h3,h4,button,a,p");
-  for (const el of nodes) {
-    const txt = (el.textContent ?? "").trim();
-    if (!txt) continue;
-    if (txt.length > 40) continue;
-    if (regex.test(txt)) return el;
-  }
-  return null;
-}
-
-function findSidebarColumnFromHitDice(root) {
-  const hitDiceLabel = findTextEl(root, /^hit\s*dice$/i) || findTextEl(root, /hit\s*dice/i);
-  if (!hitDiceLabel) return null;
-
-  let el = hitDiceLabel.parentElement;
-  while (el && el !== root) {
-    const fav = findTextEl(el, /^favorites$/i) || findTextEl(el, /favorites/i);
-    if (fav) return el;
-    el = el.parentElement;
-  }
-  return null;
-}
-
+// Keep the supplement outside native headings, buttons, and Favorites grids.
+// Structural anchors also work when the sheet is translated.
 function injectBetweenHitDiceAndFavorites(sheet, rootRaw) {
   const root = normalizeRoot(rootRaw);
-  if (!root || !sheet?.actor) return;
-
   const actor = getActorFromSheetApp(sheet);
-  if (!isCharacterActor(actor)) return;
+  if (!root || !isCharacterActor(actor)) return;
 
-  ensureOnePieceStyles();
-
-  const sidebar =
-    findSidebarColumnFromHitDice(root) ||
-    root.querySelector(".sidebar, .sheet-sidebar, aside, .left, .column.left, .actor-sidebar") ||
-    root;
-
-  removeExisting(sidebar);
-
+  removeExisting(root);
   const html = buildSidebarBlock(actor);
+  const sidebar = root.querySelector(".sidebar, .sheet-sidebar, .actor-sidebar");
 
-  const favEl = findTextEl(sidebar, /^favorites$/i) || findTextEl(sidebar, /favorites/i);
-  if (favEl?.insertAdjacentHTML) {
-    favEl.insertAdjacentHTML("beforebegin", html);
+  if (sidebar) {
+    const favorites = sidebar.querySelector(".favorites");
+    let anchor = favorites;
+    while (anchor && anchor.parentElement !== sidebar) anchor = anchor.parentElement;
+    if (anchor) {
+      anchor.insertAdjacentHTML("beforebegin", html);
+    } else {
+      const card = sidebar.querySelector(":scope > .card");
+      if (card) card.insertAdjacentHTML("afterend", html);
+      else sidebar.insertAdjacentHTML("afterbegin", html);
+    }
     return;
   }
 
-  const hdEl = findTextEl(sidebar, /^hit\s*dice$/i) || findTextEl(sidebar, /hit\s*dice/i);
-  if (hdEl?.insertAdjacentHTML) {
-    hdEl.insertAdjacentHTML("afterend", html);
-    return;
+  // Sheets without a resource sidebar get a responsive strip below the header.
+  const header = root.querySelector(".sheet-header");
+  if (header) header.insertAdjacentHTML("afterend", html);
+  else {
+    const content = root.querySelector(".sheet-body, .tidy-sheet-body, .window-content") || root;
+    content.insertAdjacentHTML("afterbegin", html);
   }
-
-  sidebar.insertAdjacentHTML("afterbegin", html);
 }
 
 function openAddBellyDialog(sheet) {
