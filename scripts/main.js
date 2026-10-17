@@ -65,8 +65,9 @@ Hooks.once("init", () => {
   ActorCls.prototype.__onepieceWillpowerWrapped = true;
 
   const original = ActorCls.prototype.getRollData;
-  ActorCls.prototype.getRollData = function () {
-    const data = original.call(this);
+  ActorCls.prototype.getRollData = function (...args) {
+    // Preserve system options, including the roll context required by dnd5e 6.
+    const data = original.apply(this, args);
     if (this?.type !== "character") return data;
 
     const level = getTotalLevel(this);
